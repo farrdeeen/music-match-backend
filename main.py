@@ -18,24 +18,16 @@ CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
 REDIRECT_URI = os.getenv("REDIRECT_URI")
 FRONTEND_URI = os.getenv("FRONTEND_URI")
 MONGODB_URI = os.getenv("MONGODB_URI")
-JWT_SECRET = os.getenv("JWT_SECRET", "your-super-secret-jwt-key-make-this-random-and-long")  # Add this to your .env
+JWT_SECRET = os.getenv("JWT_SECRET", "your-secret-key")  # Add this to your .env
 
-# MongoDB connection with SSL configuration
-import ssl
-
-# Create SSL context that's more permissive
-ssl_context = ssl.create_default_context()
-ssl_context.check_hostname = False
-ssl_context.verify_mode = ssl.CERT_NONE
-
-client = AsyncIOMotorClient(
-    MONGODB_URI,
-    ssl_context=ssl_context,
-    serverSelectionTimeoutMS=5000,  # 5 second timeout
-    connectTimeoutMS=5000,
-    socketTimeoutMS=5000
-)
-db = client["music_match_db"]  # Your database name
+# MongoDB connection
+try:
+    client = AsyncIOMotorClient(MONGODB_URI)
+    db = client["music_match_db"]
+except Exception as e:
+    print(f"MongoDB connection error: {e}")
+    client = None
+    db = None
 users_collection = db["users"]
 sessions_collection = db["sessions"]
 
@@ -47,6 +39,8 @@ async def startup_event():
         print("Successfully connected to MongoDB!")
     except Exception as e:
         print(f"Error connecting to MongoDB: {e}")
+        print("App will continue without MongoDB connection...")
+        # Don't crash the app, just log the error
 
 @app.on_event("shutdown")
 async def shutdown_event():
