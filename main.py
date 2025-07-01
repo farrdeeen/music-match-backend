@@ -34,13 +34,15 @@ sessions_collection = db["sessions"]
 @app.on_event("startup")
 async def startup_event():
     # Test the MongoDB connection
-    try:
-        await client.admin.command('ping')
-        print("Successfully connected to MongoDB!")
-    except Exception as e:
-        print(f"Error connecting to MongoDB: {e}")
-        print("App will continue without MongoDB connection...")
-        # Don't crash the app, just log the error
+    if client:
+        try:
+            await client.admin.command('ping')
+            print("Successfully connected to MongoDB!")
+        except Exception as e:
+            print(f"Error connecting to MongoDB: {e}")
+            print("App will continue without MongoDB connection...")
+    else:
+        print("MongoDB client not initialized")
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -48,19 +50,45 @@ async def shutdown_event():
 
 @app.get("/")
 def root():
-    return {"message": "Music Matcher API"}
+    return {"message": "Music Matcher API", "status": "running", "endpoints": ["/login", "/callback", "/me", "/current-track", "/debug"]}
+
+@app.get("/debug")
+def debug_env():
+    """Debug endpoint to check environment variables"""
+    return {
+        "CLIENT_ID": "SET" if CLIENT_ID else "NOT SET",
+        "CLIENT_SECRET": "SET" if CLIENT_SECRET else "NOT SET", 
+        "REDIRECT_URI": REDIRECT_URI if REDIRECT_URI else "NOT SET",
+        "FRONTEND_URI": FRONTEND_URI if FRONTEND_URI else "NOT SET",
+        "MONGODB_URI": "SET" if MONGODB_URI else "NOT SET",
+        "JWT_SECRET": "SET" if JWT_SECRET else "NOT SET"
+    }
 
 @app.get("/login")
 def login():
-    scope = "user-read-playback-state user-read-currently-playing user-library-read user-top-read user-read-email"
-    auth_url = (
-        "https://accounts.spotify.com/authorize"
-        f"?client_id={CLIENT_ID}"
-        f"&response_type=code"
-        f"&redirect_uri={REDIRECT_URI}"
-        f"&scope={scope}"
-    )
-    return RedirectResponse(auth_url)
+    try:
+        # Debug: Check if environment variables are loaded
+        print(f"CLIENT_ID: {'SET' if CLIENT_ID else 'NOT SET'}")
+        print(f"REDIRECT_URI: {'SET' if REDIRECT_URI else 'NOT SET'}")
+        
+        if not CLIENT_ID:
+            return JSONResponse(content={"error": "SPOTIFY_CLIENT_ID not configured"}, status_code=500)
+        if not REDIRECT_URI:
+            return JSONResponse(content={"error": "REDIRECT_URI not configured"}, status_code=500)
+            
+        scope = "user-read-playback-state user-read-currently-playing user-library-read user-top-read user-read-email"
+        auth_url = (
+            "https://accounts.spotify.com/authorize"
+            f"?client_id={CLIENT_ID}"
+            f"&response_type=code"
+            f"&redirect_uri={REDIRECT_URI}"
+            f"&scope={scope}"
+        )
+        print(f"Redirecting to: {auth_url}")  # Debug log
+        return RedirectResponse(auth_url)
+    except Exception as e:
+        print(f"Login error: {e}")
+        return JSONResponse(content={"error": str(e)}, status_code=500)
 
 @app.get("/callback")
 async def callback(request: Request):
@@ -91,23 +119,24 @@ async def callback(request: Request):
     user_profile = await get_spotify_user_profile(access_token)
     
     # Store/update user in MongoDB
-    user_data = {
-        "spotify_id": user_profile["id"],
-        "display_name": user_profile.get("display_name", ""),
-        "email": user_profile.get("email", ""),
-        "profile_image": user_profile["images"][0]["url"] if user_profile.get("images") else "",
-        "access_token": access_token,
-        "refresh_token": refresh_token,
-        "last_login": datetime.utcnow(),
-        "created_at": datetime.utcnow()
-    }
-    
-    # Upsert user (update if exists, create if not)
-    await users_collection.update_one(
-        {"spotify_id": user_profile["id"]},
-        {"$set": user_data, "$setOnInsert": {"created_at": datetime.utcnow()}},
-        upsert=True
-    )
+    if db is not None:
+        user_data = {
+            "spotify_id": user_profile["id"],
+            "display_name": user_profile.get("display_name", ""),
+            "email": user_profile.get("email", ""),
+            "profile_image": user_profile["images"][0]["url"] if user_profile.get("images") else "",
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "last_login": datetime.utcnow(),
+            "created_at": datetime.utcnow()
+        }
+        
+        # Upsert user (update if exists, create if not)
+        await users_collection.update_one(
+            {"spotify_id": user_profile["id"]},
+            {"$set": user_data, "$setOnInsert": {"created_at": datetime.utcnow()}},
+            upsert=True
+        )
 
     # Create a JWT token for your app
     app_token = jwt.encode(
