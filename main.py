@@ -7,12 +7,23 @@ from dotenv import load_dotenv
 import httpx
 import jwt
 import os
+from fastapi.middleware.cors import CORSMiddleware
+
+
 
 # Load environment variables
 load_dotenv()
 
 # Initialize FastAPI app
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Or ["*"] for public development
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Environment variables
 CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
