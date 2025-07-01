@@ -18,7 +18,7 @@ CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
 REDIRECT_URI = os.getenv("REDIRECT_URI")
 FRONTEND_URI = os.getenv("FRONTEND_URI")
 MONGODB_URI = os.getenv("MONGODB_URI")
-JWT_SECRET = os.getenv("JWT_SECRET", "your-secret-key")  # Add this to your .env
+JWT_SECRET = os.getenv("JWT_SECRET", "your-super-secret-jwt-key-make-this-random-and-long")  # Add this to your .env
 
 # MongoDB connection with SSL configuration
 import ssl
