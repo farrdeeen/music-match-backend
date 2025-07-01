@@ -93,16 +93,26 @@ async def callback(request: Request):
     }
 
     async with httpx.AsyncClient() as http_client:
-        token_res = await http_client.post(token_url, data=data)
-        token_data = token_res.json()
+        try:
+            token_res = await http_client.post(token_url, data=data, headers={"Content-Type": "application/x-www-form-urlencoded"})
+            token_res.raise_for_status()
+            token_data = token_res.json()
+        except httpx.HTTPError as e:
+            print("❌ Failed to exchange code for token:", e)
+            raise HTTPException(status_code=500, detail="Spotify token exchange failed")
 
     if "access_token" not in token_data:
+        print("❌ Access token missing in response:", token_data)
         raise HTTPException(status_code=400, detail="Failed to retrieve access token")
 
     access_token = token_data["access_token"]
     refresh_token = token_data.get("refresh_token")
 
-    user_profile = await get_spotify_user_profile(access_token)
+    try:
+        user_profile = await get_spotify_user_profile(access_token)
+    except Exception as e:
+        print("❌ Failed to fetch Spotify profile:", e)
+        raise HTTPException(status_code=400, detail="Failed to fetch Spotify profile")
 
     user_data = {
         "spotify_id": user_profile["id"],
@@ -129,7 +139,9 @@ async def callback(request: Request):
         algorithm="HS256"
     )
 
-    return RedirectResponse(f"{FRONTEND_URI}/dashboard?token={app_token}")
+    redirect_url = f"{FRONTEND_URI}/dashboard?token={app_token}"
+    print(f"✅ Redirecting to frontend: {redirect_url}")
+    return RedirectResponse(redirect_url)
 
 @app.get("/refresh_token")
 async def refresh_token_endpoint(request: Request):
