@@ -9,8 +9,6 @@ import jwt
 import os
 from fastapi.middleware.cors import CORSMiddleware
 
-
-
 # Load environment variables
 load_dotenv()
 
@@ -19,7 +17,7 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Or ["*"] for public development
+    allow_origins=["*"],  # Open for development
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -56,7 +54,7 @@ def root():
     return {
         "message": "🎵 Music Matcher API",
         "status": "running",
-        "endpoints": ["/login", "/callback", "/me", "/current-track", "/debug"]
+        "endpoints": ["/login", "/callback", "/me", "/current-track", "/debug", "/test-token"]
     }
 
 @app.get("/debug")
@@ -78,7 +76,8 @@ def login():
             status_code=500
         )
 
-    scope = "user-read-playback-state user-read-currently-playing user-library-read user-top-read user-read-email"
+    # Reduced scope for debugging
+    scope = "user-read-playback-state"
     auth_url = (
         "https://accounts.spotify.com/authorize"
         f"?client_id={CLIENT_ID}"
@@ -127,14 +126,14 @@ async def callback(request: Request):
         user_profile = await get_spotify_user_profile(access_token)
     except Exception as e:
         print("❌ Failed to fetch Spotify profile:", e)
-        raise HTTPException(status_code=400, detail="Failed to fetch Spotify profile")
-    print("Spotify token response:", token_res.text)
+        raise HTTPException(status_code=400, detail=f"Failed to fetch Spotify profile: {e}")
 
+    print("✅ Fetched Spotify user profile:", user_profile)
 
     user_data = {
         "spotify_id": user_profile["id"],
         "display_name": user_profile.get("display_name", ""),
-        #"email": user_profile.get("email", ""),
+        # "email": user_profile.get("email", ""),  # TEMP: Commented out
         "profile_image": user_profile["images"][0]["url"] if user_profile.get("images") else "",
         "access_token": access_token,
         "refresh_token": refresh_token,
@@ -241,15 +240,21 @@ async def get_current_track(request: Request):
 
     return current_track or {"message": "Nothing currently playing."}
 
-# Helper functions
+# ✅ Helper function for user profile
 async def get_spotify_user_profile(access_token: str):
     headers = {"Authorization": f"Bearer {access_token}"}
     async with httpx.AsyncClient() as client:
         response = await client.get("https://api.spotify.com/v1/me", headers=headers)
+        print("📡 Spotify /me status:", response.status_code)
+        print("📡 Spotify /me response:", response.text)
         if response.status_code != 200:
-            raise HTTPException(status_code=400, detail="Failed to fetch Spotify profile")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Failed to fetch Spotify profile. Status: {response.status_code}, Response: {response.text}"
+            )
         return response.json()
 
+# ✅ Helper function for currently playing track
 async def get_spotify_current_track(access_token: str):
     headers = {"Authorization": f"Bearer {access_token}"}
     async with httpx.AsyncClient() as client:
@@ -259,6 +264,17 @@ async def get_spotify_current_track(access_token: str):
         elif response.status_code != 200:
             return None
         return response.json()
+
+# ✅ Token testing endpoint
+@app.get("/test-token")
+async def test_token(token: str):
+    headers = {"Authorization": f"Bearer {token}"}
+    async with httpx.AsyncClient() as client:
+        response = await client.get("https://api.spotify.com/v1/me", headers=headers)
+        return {
+            "status_code": response.status_code,
+            "response": response.text
+        }
 
 if __name__ == "__main__":
     import uvicorn
