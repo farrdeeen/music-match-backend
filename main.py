@@ -95,6 +95,8 @@ async def callback(request: Request):
         raise HTTPException(status_code=400, detail="Authorization code not provided")
 
     token_url = "https://accounts.spotify.com/api/token"
+    print("Exchanging code for token with redirect_uri:", REDIRECT_URI)
+
     data = {
         "grant_type": "authorization_code",
         "code": code,
@@ -124,6 +126,8 @@ async def callback(request: Request):
     except Exception as e:
         print("❌ Failed to fetch Spotify profile:", e)
         raise HTTPException(status_code=400, detail="Failed to fetch Spotify profile")
+    print("Spotify token response:", token_res.text)
+
 
     user_data = {
         "spotify_id": user_profile["id"],
