@@ -108,8 +108,10 @@ async def callback(request: Request):
     async with httpx.AsyncClient() as http_client:
         try:
             token_res = await http_client.post(token_url, data=data, headers={"Content-Type": "application/x-www-form-urlencoded"})
+            print("Raw token response:", token_res.text)
             token_res.raise_for_status()
             token_data = token_res.json()
+            print("Parsed token data:", token_data)
         except httpx.HTTPError as e:
             print("❌ Failed to exchange code for token:", e)
             raise HTTPException(status_code=500, detail="Spotify token exchange failed")
