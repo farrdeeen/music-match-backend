@@ -134,7 +134,7 @@ async def callback(request: Request):
     user_data = {
         "spotify_id": user_profile["id"],
         "display_name": user_profile.get("display_name", ""),
-        "email": user_profile.get("email", ""),
+        #"email": user_profile.get("email", ""),
         "profile_image": user_profile["images"][0]["url"] if user_profile.get("images") else "",
         "access_token": access_token,
         "refresh_token": refresh_token,
