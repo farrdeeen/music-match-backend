@@ -253,6 +253,68 @@ async def get_spotify_user_profile(access_token: str):
                 detail=f"Failed to fetch Spotify profile. Status: {response.status_code}, Response: {response.text}"
             )
         return response.json()
+    
+@app.get("/match-users")
+async def get_user_matches(request: Request):
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid token")
+
+    token = auth_header.split(" ")[1]
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+        spotify_id = payload["spotify_id"]
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    user_sessions = await sessions_collection.find({"user_id": spotify_id}).to_list(length=1000)
+    user_artist_counts = {}
+    for session in user_sessions:
+        artist = session["artist_name"]
+        user_artist_counts[artist] = user_artist_counts.get(artist, 0) + 1
+
+    user_artists_set = set(user_artist_counts.keys())
+
+    pipeline = [
+        {"$match": {"user_id": {"$ne": spotify_id}}},
+        {"$group": {
+            "_id": "$user_id",
+            "artists": {"$addToSet": "$artist_name"},
+            "sessions": {"$push": "$artist_name"}
+        }}
+    ]
+    other_users = await sessions_collection.aggregate(pipeline).to_list(length=100)
+
+    matches = []
+    for user in other_users:
+        other_counts = {}
+        for artist in user["sessions"]:
+            other_counts[artist] = other_counts.get(artist, 0) + 1
+
+        shared_artists = user_artists_set.intersection(set(user["artists"]))
+        if not shared_artists:
+            continue
+
+        similarity = sum(
+            min(user_artist_counts[artist], other_counts[artist])
+            for artist in shared_artists
+        )
+
+        user_doc = await users_collection.find_one({"spotify_id": user["_id"]})
+
+        if user_doc:
+            matches.append({
+                "spotify_id": user["_id"],
+                "display_name": user_doc.get("display_name", "Unknown"),
+                "profile_image": user_doc.get("profile_image", ""),
+                "similarity": similarity,
+                "top_artists": list(shared_artists)[:5]
+            })
+
+    matches.sort(key=lambda x: x["similarity"], reverse=True)
+
+    return {"matches": matches[:10]}
+
 
 # ✅ Helper function for currently playing track
 async def get_spotify_current_track(access_token: str):
