@@ -308,8 +308,10 @@ async def get_user_matches(request: Request):
                 "display_name": user_doc.get("display_name", "Unknown"),
                 "profile_image": user_doc.get("profile_image", ""),
                 "similarity": similarity,
-                "top_artists": list(shared_artists)[:5]
+                "shared_artists": list(shared_artists),  # ✅ correct key
+                "top_artists": sorted(other_counts, key=other_counts.get, reverse=True)[:5]  # ✅ keep top artists too
             })
+
 
     matches.sort(key=lambda x: x["similarity"], reverse=True)
 
