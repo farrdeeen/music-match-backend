@@ -15,9 +15,10 @@ load_dotenv()
 # Initialize FastAPI app
 app = FastAPI()
 
+# Enable CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Open for development
+    allow_origins=["*"],  # Allow all origins for development
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -36,12 +37,22 @@ client = AsyncIOMotorClient(MONGODB_URI)
 db = client["music_match_db"]
 users_collection = db["users"]
 sessions_collection = db["sessions"]
+chats_collection = db["chats"]  # ✅ Ensure chats_collection is set
 
 @app.on_event("startup")
 async def startup_event():
     try:
         await client.admin.command("ping")
         print("✅ MongoDB connection successful.")
+
+        # ✅ Ensure 'chats' collection exists
+        collections = await db.list_collection_names()
+        if "chats" not in collections:
+            await db.create_collection("chats")
+            print("✅ Created 'chats' collection.")
+        else:
+            print("✅ 'chats' collection already exists.")
+
     except Exception as e:
         print("❌ MongoDB connection error:", e)
 
@@ -54,7 +65,10 @@ def root():
     return {
         "message": "🎵 Music Matcher API",
         "status": "running",
-        "endpoints": ["/login", "/callback", "/me", "/current-track", "/debug", "/test-token"]
+        "endpoints": [
+            "/login", "/callback", "/me", "/current-track", 
+            "/match-users", "/chats", "/test-token"
+        ]
     }
 
 @app.get("/debug")
@@ -76,7 +90,6 @@ def login():
             status_code=500
         )
 
-    # Reduced scope for debugging
     scope = "user-read-playback-state"
     auth_url = (
         "https://accounts.spotify.com/authorize"
@@ -116,7 +129,6 @@ async def callback(request: Request):
             raise HTTPException(status_code=500, detail="Spotify token exchange failed")
 
     if "access_token" not in token_data:
-        print("❌ Access token missing in response:", token_data)
         raise HTTPException(status_code=400, detail="Failed to retrieve access token")
 
     access_token = token_data["access_token"]
@@ -125,7 +137,6 @@ async def callback(request: Request):
     try:
         user_profile = await get_spotify_user_profile(access_token)
     except Exception as e:
-        print("❌ Failed to fetch Spotify profile:", e)
         raise HTTPException(status_code=400, detail=f"Failed to fetch Spotify profile: {e}")
 
     print("✅ Fetched Spotify user profile:", user_profile)
@@ -133,7 +144,6 @@ async def callback(request: Request):
     user_data = {
         "spotify_id": user_profile["id"],
         "display_name": user_profile.get("display_name", ""),
-        # "email": user_profile.get("email", ""),  # TEMP: Commented out
         "profile_image": user_profile["images"][0]["url"] if user_profile.get("images") else "",
         "access_token": access_token,
         "refresh_token": refresh_token,
@@ -159,32 +169,6 @@ async def callback(request: Request):
     print(f"✅ Redirecting to frontend: {redirect_url}")
     return RedirectResponse(redirect_url)
 
-@app.get("/refresh_token")
-async def refresh_token_endpoint(request: Request):
-    refresh_token = request.query_params.get("refresh_token")
-    if not refresh_token:
-        raise HTTPException(status_code=400, detail="Refresh token not provided")
-
-    token_url = "https://accounts.spotify.com/api/token"
-    data = {
-        "grant_type": "refresh_token",
-        "refresh_token": refresh_token,
-        "client_id": CLIENT_ID,
-        "client_secret": CLIENT_SECRET,
-    }
-
-    async with httpx.AsyncClient() as client:
-        response = await client.post(token_url, data=data)
-        new_tokens = response.json()
-
-    if "access_token" in new_tokens:
-        await users_collection.update_one(
-            {"refresh_token": refresh_token},
-            {"$set": {"access_token": new_tokens["access_token"]}}
-        )
-
-    return JSONResponse(content=new_tokens)
-
 @app.get("/me")
 async def get_current_user(request: Request):
     auth_header = request.headers.get("Authorization")
@@ -208,160 +192,7 @@ async def get_current_user(request: Request):
 
     return user
 
-@app.get("/current-track")
-async def get_current_track(request: Request):
-    auth_header = request.headers.get("Authorization")
-    if not auth_header or not auth_header.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing or invalid token")
-
-    token = auth_header.split(" ")[1]
-    try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
-        spotify_id = payload["spotify_id"]
-    except jwt.InvalidTokenError:
-        raise HTTPException(status_code=401, detail="Invalid token")
-
-    user = await users_collection.find_one({"spotify_id": spotify_id})
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    current_track = await get_spotify_current_track(user["access_token"])
-
-    if current_track and current_track.get("is_playing"):
-        session_data = {
-            "user_id": spotify_id,
-            "track_id": current_track["item"]["id"],
-            "track_name": current_track["item"]["name"],
-            "artist_name": current_track["item"]["artists"][0]["name"],
-            "timestamp": datetime.utcnow(),
-            "is_playing": current_track["is_playing"]
-        }
-        await sessions_collection.insert_one(session_data)
-
-    return current_track or {"message": "Nothing currently playing."}
-
-# ✅ Helper function for user profile
-async def get_spotify_user_profile(access_token: str):
-    headers = {"Authorization": f"Bearer {access_token}"}
-    async with httpx.AsyncClient() as client:
-        response = await client.get("https://api.spotify.com/v1/me", headers=headers)
-        print("📡 Spotify /me status:", response.status_code)
-        print("📡 Spotify /me response:", response.text)
-        if response.status_code != 200:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Failed to fetch Spotify profile. Status: {response.status_code}, Response: {response.text}"
-            )
-        return response.json()
-    
-@app.get("/match-users")
-async def get_user_matches(request: Request):
-    auth_header = request.headers.get("Authorization")
-    if not auth_header or not auth_header.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing or invalid token")
-
-    token = auth_header.split(" ")[1]
-    try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
-        spotify_id = payload["spotify_id"]
-    except jwt.InvalidTokenError:
-        raise HTTPException(status_code=401, detail="Invalid token")
-
-    user_sessions = await sessions_collection.find({"user_id": spotify_id}).to_list(length=1000)
-    user_artist_counts = {}
-    for session in user_sessions:
-        artist = session["artist_name"]
-        user_artist_counts[artist] = user_artist_counts.get(artist, 0) + 1
-
-    user_artists_set = set(user_artist_counts.keys())
-
-    pipeline = [
-        {"$match": {"user_id": {"$ne": spotify_id}}},
-        {"$group": {
-            "_id": "$user_id",
-            "artists": {"$addToSet": "$artist_name"},
-            "sessions": {"$push": "$artist_name"}
-        }}
-    ]
-    other_users = await sessions_collection.aggregate(pipeline).to_list(length=100)
-
-    matches = []
-    for user in other_users:
-        other_counts = {}
-        for artist in user["sessions"]:
-            other_counts[artist] = other_counts.get(artist, 0) + 1
-
-        shared_artists = user_artists_set.intersection(set(user["artists"]))
-        if not shared_artists:
-            continue
-
-        similarity = sum(
-            min(user_artist_counts[artist], other_counts[artist])
-            for artist in shared_artists
-        )
-
-        user_doc = await users_collection.find_one({"spotify_id": user["_id"]})
-
-        if user_doc:
-            matches.append({
-                "spotify_id": user["_id"],
-                "display_name": user_doc.get("display_name", "Unknown"),
-                "profile_image": user_doc.get("profile_image", ""),
-                "similarity": similarity,
-                "shared_artists": list(shared_artists),  # ✅ correct key
-                "top_artists": sorted(other_counts, key=other_counts.get, reverse=True)[:5]  # ✅ keep top artists too
-            })
-
-
-    matches.sort(key=lambda x: x["similarity"], reverse=True)
-
-    return {"matches": matches[:10]}
-
-
-
-# ✅ Helper function for currently playing track
-async def get_spotify_current_track(access_token: str):
-    headers = {"Authorization": f"Bearer {access_token}"}
-    async with httpx.AsyncClient() as client:
-        response = await client.get("https://api.spotify.com/v1/me/player/currently-playing", headers=headers)
-        if response.status_code == 204:
-            return None
-        elif response.status_code != 200:
-            return None
-        return response.json()
-
-# ✅ Token testing endpoint
-@app.get("/test-token")
-async def test_token(token: str):
-    headers = {"Authorization": f"Bearer {token}"}
-    async with httpx.AsyncClient() as client:
-        response = await client.get("https://api.spotify.com/v1/me", headers=headers)
-        return {
-            "status_code": response.status_code,
-            "response": response.text
-        }
-# ✅ Chat collection
-# ✅ Ensure chats_collection exists
-chats_collection = db["chats"]
-
-@app.on_event("startup")
-async def startup_event():
-    try:
-        await client.admin.command("ping")
-        print("✅ MongoDB connection successful.")
-
-        # ✅ Check if 'chats' collection exists
-        collections = await db.list_collection_names()
-        if "chats" not in collections:
-            await db.create_collection("chats")
-            print("✅ Created 'chats' collection.")
-        else:
-            print("✅ 'chats' collection already exists.")
-
-    except Exception as e:
-        print("❌ MongoDB connection error:", e)
-
-
+# ✅ Chat endpoints
 @app.post("/chats")
 async def save_chat(request: Request):
     try:
@@ -373,7 +204,6 @@ async def save_chat(request: Request):
         message = data.get("message")
 
         if not sender_id or not receiver_id or not message:
-            print("⚠️ Missing required fields.")
             raise HTTPException(status_code=400, detail="Missing sender_id, receiver_id, or message.")
 
         chat_doc = {
@@ -396,7 +226,6 @@ async def save_chat(request: Request):
         print(f"❌ Error saving chat: {e}")
         raise HTTPException(status_code=500, detail="Failed to save chat")
 
-
 @app.get("/chats")
 async def get_chats(sender_id: str, receiver_id: str):
     try:
@@ -411,13 +240,11 @@ async def get_chats(sender_id: str, receiver_id: str):
 
         chats = await chats_cursor.to_list(length=100)
 
-        # Convert ObjectId and datetime for JSON serialization
         for chat in chats:
             chat["_id"] = str(chat["_id"])
             chat["timestamp"] = chat["timestamp"].isoformat()
 
         print(f"✅ Retrieved {len(chats)} chats")
-
         return {
             "success": True,
             "total": len(chats),
@@ -429,6 +256,14 @@ async def get_chats(sender_id: str, receiver_id: str):
         raise HTTPException(status_code=500, detail="Failed to fetch chats")
 
 
+# ✅ Helper: Get Spotify profile
+async def get_spotify_user_profile(access_token: str):
+    headers = {"Authorization": f"Bearer {access_token}"}
+    async with httpx.AsyncClient() as client:
+        response = await client.get("https://api.spotify.com/v1/me", headers=headers)
+        if response.status_code != 200:
+            raise HTTPException(status_code=response.status_code, detail="Failed to fetch Spotify profile")
+        return response.json()
 
 
 if __name__ == "__main__":
