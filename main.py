@@ -341,6 +341,7 @@ async def test_token(token: str):
             "response": response.text
         }
 # ✅ Chat collection
+# ✅ Ensure chats_collection exists
 chats_collection = db["chats"]
 
 @app.on_event("startup")
@@ -349,7 +350,7 @@ async def startup_event():
         await client.admin.command("ping")
         print("✅ MongoDB connection successful.")
 
-        # ✅ Ensure 'chats' collection exists
+        # ✅ Check if 'chats' collection exists
         collections = await db.list_collection_names()
         if "chats" not in collections:
             await db.create_collection("chats")
@@ -360,41 +361,73 @@ async def startup_event():
     except Exception as e:
         print("❌ MongoDB connection error:", e)
 
+
 @app.post("/chats")
 async def save_chat(request: Request):
-    data = await request.json()
-    sender_id = data.get("sender_id")
-    receiver_id = data.get("receiver_id")
-    message = data.get("message")
+    try:
+        data = await request.json()
+        print(f"📥 Incoming chat data: {data}")
 
-    if not all([sender_id, receiver_id, message]):
-        raise HTTPException(status_code=400, detail="Missing fields")
+        sender_id = data.get("sender_id")
+        receiver_id = data.get("receiver_id")
+        message = data.get("message")
 
-    chat_doc = {
-        "sender_id": sender_id,
-        "receiver_id": receiver_id,
-        "message": message,
-        "timestamp": datetime.utcnow()
-    }
+        if not sender_id or not receiver_id or not message:
+            print("⚠️ Missing required fields.")
+            raise HTTPException(status_code=400, detail="Missing sender_id, receiver_id, or message.")
 
-    result = await chats_collection.insert_one(chat_doc)
-    return {"success": True, "chat_id": str(result.inserted_id)}
+        chat_doc = {
+            "sender_id": sender_id,
+            "receiver_id": receiver_id,
+            "message": message,
+            "timestamp": datetime.utcnow()
+        }
+
+        result = await chats_collection.insert_one(chat_doc)
+        print(f"✅ Chat saved with ID: {result.inserted_id}")
+
+        return {
+            "success": True,
+            "chat_id": str(result.inserted_id),
+            "message": "Chat saved successfully"
+        }
+
+    except Exception as e:
+        print(f"❌ Error saving chat: {e}")
+        raise HTTPException(status_code=500, detail="Failed to save chat")
 
 
 @app.get("/chats")
 async def get_chats(sender_id: str, receiver_id: str):
-    chats = await chats_collection.find({
-        "$or": [
-            {"sender_id": sender_id, "receiver_id": receiver_id},
-            {"sender_id": receiver_id, "receiver_id": sender_id}
-        ]
-    }).sort("timestamp", 1).to_list(length=100)
+    try:
+        print(f"📡 Fetching chats between {sender_id} and {receiver_id}")
 
-    # Convert ObjectId to string for JSON serialization
-    for chat in chats:
-        chat["_id"] = str(chat["_id"])
+        chats_cursor = chats_collection.find({
+            "$or": [
+                {"sender_id": sender_id, "receiver_id": receiver_id},
+                {"sender_id": receiver_id, "receiver_id": sender_id}
+            ]
+        }).sort("timestamp", 1)
 
-    return {"chats": chats}
+        chats = await chats_cursor.to_list(length=100)
+
+        # Convert ObjectId and datetime for JSON serialization
+        for chat in chats:
+            chat["_id"] = str(chat["_id"])
+            chat["timestamp"] = chat["timestamp"].isoformat()
+
+        print(f"✅ Retrieved {len(chats)} chats")
+
+        return {
+            "success": True,
+            "total": len(chats),
+            "chats": chats
+        }
+
+    except Exception as e:
+        print(f"❌ Error fetching chats: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch chats")
+
 
 
 
